@@ -49,9 +49,9 @@ const STRINGS: StringSpec[] = [
 ]
 
 const ANSWER = STRINGS.map((string) => string.id)
-const STATS_KEY = 'daddario-ballend-game:stats:v1'
-const PLAYER_KEY = 'daddario-ballend-game:player:v1'
-const PLAYED_KEY = 'daddario-ballend-game:played:v1'
+const STATS_KEY = 'hue-order:stats:v1'
+const PLAYER_KEY = 'hue-order:player:v1'
+const PLAYED_KEY = 'hue-order:played:v1'
 
 const copy = {
   ja: {

@@ -1,6 +1,6 @@
 import { Redis } from '@upstash/redis'
 
-const PREFIX = 'daddario-ballend-sort:v1'
+const PREFIX = 'hue-order:v1'
 const ANSWER = ['gold', 'red', 'black', 'green', 'purple', 'silver']
 const memory = {
   players: new Set(),
