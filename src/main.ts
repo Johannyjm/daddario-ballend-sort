@@ -57,7 +57,7 @@ const copy = {
   ja: {
     submit: '回答する',
     again: 'もう一度',
-    correct: '正解',
+    correct: 'ギタリストですね...？',
     wrong: '残念',
     stats: {
       players: '人数',
@@ -82,7 +82,7 @@ const copy = {
   en: {
     submit: 'Ring it',
     again: 'Again',
-    correct: 'Correct',
+    correct: 'You are a guitarist...?',
     wrong: 'Missed',
     stats: {
       players: 'Players',
