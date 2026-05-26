@@ -46,4 +46,6 @@ UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 ```
 
+Upstash Vercel Integration が `UPSTASH_REDIS_KV_REST_API_URL` と
+`UPSTASH_REDIS_KV_REST_API_TOKEN` を作成した場合も、そのまま読めます。
 既存のVercel KV環境向けに `KV_REST_API_URL` と `KV_REST_API_TOKEN` も読めます。
