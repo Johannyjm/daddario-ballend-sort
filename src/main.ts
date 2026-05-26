@@ -55,7 +55,7 @@ const PLAYED_KEY = 'daddario-ballend-game:played:v1'
 
 const copy = {
   ja: {
-    submit: '鳴らす',
+    submit: '回答する',
     again: 'もう一度',
     correct: '正解',
     wrong: '残念',
@@ -279,14 +279,13 @@ function insightItem(label: string, insight: ColorInsight | null) {
   return `
     <div class="stat insight">
       <span>${label}</span>
-      <strong>${getString(insight.id).colorName[state.locale]}</strong>
+      <strong>${getStringLabel(insight.id)}</strong>
       <small>${insight.rate}%</small>
     </div>
   `
 }
 
 function colorRowMarkup(id: BallId) {
-  const string = getString(id)
   const colorStats = state.stats.colors[id]
   const rate = getColorRate(colorStats)
   const displayRate = colorStats.attempts === 0 ? '—' : `${rate}%`
@@ -294,7 +293,7 @@ function colorRowMarkup(id: BallId) {
   return `
     <div class="color-row color-row-${id}" style="--value: ${rate}%">
       <span class="color-swatch" aria-hidden="true"></span>
-      <span class="color-name">${string.colorName[state.locale]}</span>
+      <span class="color-name">${getStringLabel(id)}</span>
       <span class="color-bar" aria-hidden="true"><span></span></span>
       <strong>${displayRate}</strong>
     </div>
@@ -386,6 +385,11 @@ function shuffleAnswer(): BallId[] {
 
 function getString(id: BallId) {
   return STRINGS.find((string) => string.id === id) ?? STRINGS[0]
+}
+
+function getStringLabel(id: BallId) {
+  const string = getString(id)
+  return `${string.stringNo}${getOrdinalSuffix(string.stringNo)}`
 }
 
 function getInitialLocale(): Locale {
@@ -480,8 +484,7 @@ async function requestStats(url: string, init?: RequestInit): Promise<Stats | nu
 
 function shouldUseStatsApi() {
   const forced = import.meta.env.VITE_STATS_API === '1'
-  const localHostnames = new Set(['localhost', '127.0.0.1', '0.0.0.0'])
-  return forced || !localHostnames.has(window.location.hostname)
+  return forced || !import.meta.env.DEV
 }
 
 async function fetchWithTimeout(url: string, init?: RequestInit) {
