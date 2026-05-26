@@ -40,20 +40,14 @@ const ANSWER = STRINGS.map((string) => string.id)
 const STATS_KEY = 'daddario-ballend-game:stats:v1'
 const PLAYER_KEY = 'daddario-ballend-game:player:v1'
 const PLAYED_KEY = 'daddario-ballend-game:played:v1'
-const LOCALE_KEY = 'daddario-ballend-game:locale:v1'
 const EMPTY_STATS: Stats = { players: 0, attempts: 0, correct: 0 }
 
 const copy = {
   ja: {
-    title: 'ギタリストがなぜか正解できる並べ替えゲーム',
-    order: '6弦 -> 1弦',
-    pool: 'BALL ENDS',
     submit: '鳴らす',
     again: 'もう一度',
     correct: '正解',
     wrong: '残念',
-    you: 'YOU',
-    answer: 'ANSWER',
     stats: {
       players: '人数',
       attempts: '挑戦',
@@ -61,7 +55,6 @@ const copy = {
       rate: '率',
     },
     aria: {
-      locale: '言語',
       pool: 'シャッフルされたボールエンド',
       board: '6弦から1弦までの回答枠',
       remove: '枠から戻す',
@@ -69,15 +62,10 @@ const copy = {
     },
   },
   en: {
-    title: 'The Ball-End Sort Guitarists Somehow Know',
-    order: '6th -> 1st',
-    pool: 'BALL ENDS',
     submit: 'Ring it',
     again: 'Again',
     correct: 'Correct',
     wrong: 'Missed',
-    you: 'YOU',
-    answer: 'ANSWER',
     stats: {
       players: 'Players',
       attempts: 'Plays',
@@ -85,7 +73,6 @@ const copy = {
       rate: 'Rate',
     },
     aria: {
-      locale: 'Language',
       pool: 'Shuffled ball ends',
       board: 'Answer slots from sixth string to first string',
       remove: 'Return this ball end',
@@ -146,53 +133,30 @@ app.addEventListener('click', (event) => {
   }
 })
 
-app.addEventListener('change', (event) => {
-  const target = event.target
-  if (!(target instanceof HTMLSelectElement) || target.name !== 'locale') return
-  if (!isLocale(target.value)) return
-
-  state.locale = target.value
-  storageSet(LOCALE_KEY, target.value)
-  render()
-})
-
 function render() {
   const text = copy[state.locale]
   const isComplete = state.slots.every(Boolean)
   const mainButtonLabel = state.status === 'playing' ? text.submit : text.again
   const mainButtonDisabled = state.status === 'playing' && (!isComplete || state.isSaving)
 
+  document.documentElement.lang = state.locale
+
   app.innerHTML = `
-    <main class="shell">
-      <header class="topbar">
-        <p class="brand">D'Addario Ball End</p>
-        <select class="locale" name="locale" aria-label="${text.aria.locale}">
-          <option value="ja" ${state.locale === 'ja' ? 'selected' : ''}>JP</option>
-          <option value="en" ${state.locale === 'en' ? 'selected' : ''}>EN</option>
-        </select>
-      </header>
-
-      <section class="hero" aria-labelledby="game-title">
-        <h1 id="game-title">${text.title}</h1>
-        <p class="order-label">${text.order}</p>
-      </section>
-
-      <section class="stats" aria-label="Stats">
-        ${statItem(text.stats.players, state.stats.players)}
-        ${statItem(text.stats.attempts, state.stats.attempts)}
-        ${statItem(text.stats.correct, state.stats.correct)}
-        ${statItem(text.stats.rate, `${getRate(state.stats)}%`)}
-      </section>
-
-      <section class="board" aria-label="${text.aria.board}">
-        ${state.slots.map((id, index) => slotMarkup(id, index)).join('')}
+    <main class="shell ${state.status === 'result' ? 'is-result' : ''}">
+      <section class="playfield">
+        <div class="edge-labels" aria-hidden="true">
+          <span>6th</span>
+          <span>1st</span>
+        </div>
+        <div class="board" aria-label="${text.aria.board}">
+          ${state.slots.map((id, index) => slotMarkup(id, index)).join('')}
+        </div>
       </section>
 
       ${
         state.status === 'playing'
           ? `
             <section class="pool-wrap" aria-label="${text.aria.pool}">
-              <p class="section-kicker">${text.pool}</p>
               <div class="pool">
                 ${availableBalls().map((id) => poolButtonMarkup(id)).join('')}
               </div>
@@ -219,7 +183,7 @@ function statItem(label: string, value: string | number) {
 
 function slotMarkup(id: BallId | null, index: number) {
   const string = STRINGS[index]
-  const label = `${string.stringNo}${state.locale === 'ja' ? '弦' : getOrdinalSuffix(string.stringNo)} ${string.note}`
+  const label = `${string.stringNo}${getOrdinalSuffix(string.stringNo)} ${string.note}`
   const colorText = id ? getString(id).colorName[state.locale] : ''
   const canRemove = Boolean(id && state.status === 'playing')
   const aria = id
@@ -235,7 +199,6 @@ function slotMarkup(id: BallId | null, index: number) {
       aria-label="${aria}"
       ${canRemove ? '' : 'disabled'}
     >
-      <span class="slot-label">${label}</span>
       ${id ? ballVisualMarkup(id, 'slot-ball') : '<span class="slot-empty" aria-hidden="true"></span>'}
     </button>
   `
@@ -255,28 +218,17 @@ function poolButtonMarkup(id: BallId) {
 function resultMarkup() {
   const text = copy[state.locale]
   const tone = state.result ? 'correct' : 'wrong'
-  const rows = state.result
-    ? answerRowMarkup(text.answer, ANSWER)
-    : `${answerRowMarkup(text.you, state.slots.filter(isBallId))}${answerRowMarkup(text.answer, ANSWER)}`
 
   return `
     <section class="result result-${tone}" aria-live="polite">
       <h2>${state.result ? text.correct : text.wrong}</h2>
-      <div class="result-rows">
-        ${rows}
+      <div class="stats" aria-label="Stats">
+        ${statItem(text.stats.players, state.stats.players)}
+        ${statItem(text.stats.attempts, state.stats.attempts)}
+        ${statItem(text.stats.correct, state.stats.correct)}
+        ${statItem(text.stats.rate, `${getRate(state.stats)}%`)}
       </div>
     </section>
-  `
-}
-
-function answerRowMarkup(label: string, ids: BallId[]) {
-  return `
-    <div class="answer-row">
-      <span>${label}</span>
-      <div class="answer-balls">
-        ${ids.map((id) => ballVisualMarkup(id, 'answer-ball')).join('')}
-      </div>
-    </div>
   `
 }
 
@@ -367,13 +319,8 @@ function getString(id: BallId) {
 }
 
 function getInitialLocale(): Locale {
-  const saved = storageGet(LOCALE_KEY)
-  if (isLocale(saved)) return saved
-  return 'ja'
-}
-
-function isLocale(value: unknown): value is Locale {
-  return value === 'ja' || value === 'en'
+  const browserLocale = navigator.languages?.[0] ?? navigator.language
+  return browserLocale?.toLowerCase().startsWith('ja') ? 'ja' : 'en'
 }
 
 function isBallId(value: unknown): value is BallId {
