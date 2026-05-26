@@ -2,6 +2,8 @@
 
 6色を直感で並べる軽量パズルです。
 
+https://hue-order.vercel.app/
+
 ## Local
 
 ```sh
