@@ -15,6 +15,18 @@ type Stats = {
   players: number
   attempts: number
   correct: number
+  stringHits: number
+  colors: Record<BallId, ColorStats>
+}
+
+type ColorStats = {
+  attempts: number
+  correct: number
+}
+
+type ColorInsight = {
+  id: BallId
+  rate: number
 }
 
 type GameState = {
@@ -40,7 +52,6 @@ const ANSWER = STRINGS.map((string) => string.id)
 const STATS_KEY = 'daddario-ballend-game:stats:v1'
 const PLAYER_KEY = 'daddario-ballend-game:player:v1'
 const PLAYED_KEY = 'daddario-ballend-game:played:v1'
-const EMPTY_STATS: Stats = { players: 0, attempts: 0, correct: 0 }
 
 const copy = {
   ja: {
@@ -53,6 +64,13 @@ const copy = {
       attempts: '挑戦',
       correct: '正解',
       rate: '率',
+      perfect: '完全正解',
+      perfectRate: '完全率',
+      average: '平均',
+      colorAccuracy: '色別正解率',
+      strongest: '安定',
+      toughest: '難所',
+      noData: 'まだ',
     },
     aria: {
       pool: 'シャッフルされたボールエンド',
@@ -71,6 +89,13 @@ const copy = {
       attempts: 'Plays',
       correct: 'Hits',
       rate: 'Rate',
+      perfect: 'Perfect',
+      perfectRate: 'Rate',
+      average: 'Average',
+      colorAccuracy: 'Color accuracy',
+      strongest: 'Strongest',
+      toughest: 'Toughest',
+      noData: 'Pending',
     },
     aria: {
       pool: 'Shuffled ball ends',
@@ -143,19 +168,18 @@ function render() {
 
   app.innerHTML = `
     <main class="shell ${state.status === 'result' ? 'is-result' : ''}">
-      <section class="playfield">
-        <div class="edge-labels" aria-hidden="true">
-          <span>6th</span>
-          <span>1st</span>
-        </div>
-        <div class="board" aria-label="${text.aria.board}">
-          ${state.slots.map((id, index) => slotMarkup(id, index)).join('')}
-        </div>
-      </section>
-
       ${
         state.status === 'playing'
           ? `
+            <section class="playfield">
+              <div class="edge-labels" aria-hidden="true">
+                <span>6th</span>
+                <span>1st</span>
+              </div>
+              <div class="board" aria-label="${text.aria.board}">
+                ${state.slots.map((id, index) => slotMarkup(id, index)).join('')}
+              </div>
+            </section>
             <section class="pool-wrap" aria-label="${text.aria.pool}">
               <div class="pool">
                 ${availableBalls().map((id) => poolButtonMarkup(id)).join('')}
@@ -172,9 +196,9 @@ function render() {
   `
 }
 
-function statItem(label: string, value: string | number) {
+function statItem(label: string, value: string | number, className = '') {
   return `
-    <div class="stat">
+    <div class="stat ${className}">
       <span>${label}</span>
       <strong>${value}</strong>
     </div>
@@ -218,17 +242,62 @@ function poolButtonMarkup(id: BallId) {
 function resultMarkup() {
   const text = copy[state.locale]
   const tone = state.result ? 'correct' : 'wrong'
+  const colorSamples = getColorSampleRounds(state.stats)
+  const average = colorSamples === 0 ? text.stats.noData : `${formatDecimal(state.stats.stringHits / colorSamples)}/6`
+  const strongest = getColorInsight(state.stats, 'strongest')
+  const toughest = getColorInsight(state.stats, 'toughest')
 
   return `
-    <section class="result result-${tone}" aria-live="polite">
+    <section class="dashboard result-${tone}" aria-live="polite">
       <h2>${state.result ? text.correct : text.wrong}</h2>
-      <div class="stats" aria-label="Stats">
-        ${statItem(text.stats.players, state.stats.players)}
+      <div class="metric-grid" aria-label="Stats">
         ${statItem(text.stats.attempts, state.stats.attempts)}
-        ${statItem(text.stats.correct, state.stats.correct)}
-        ${statItem(text.stats.rate, `${getRate(state.stats)}%`)}
+        ${statItem(text.stats.perfect, state.stats.correct)}
+        ${statItem(text.stats.perfectRate, `${getRate(state.stats)}%`)}
+        ${statItem(text.stats.average, average)}
+      </div>
+      <section class="color-panel" aria-label="${text.stats.colorAccuracy}">
+        <h3>${text.stats.colorAccuracy}</h3>
+        <div class="color-rows">
+          ${ANSWER.map((id) => colorRowMarkup(id)).join('')}
+        </div>
+      </section>
+      <div class="insight-grid">
+        ${insightItem(text.stats.strongest, strongest)}
+        ${insightItem(text.stats.toughest, toughest)}
+        ${statItem(text.stats.players, state.stats.players, 'insight')}
       </div>
     </section>
+  `
+}
+
+function insightItem(label: string, insight: ColorInsight | null) {
+  if (!insight) {
+    return statItem(label, copy[state.locale].stats.noData, 'insight')
+  }
+
+  return `
+    <div class="stat insight">
+      <span>${label}</span>
+      <strong>${getString(insight.id).colorName[state.locale]}</strong>
+      <small>${insight.rate}%</small>
+    </div>
+  `
+}
+
+function colorRowMarkup(id: BallId) {
+  const string = getString(id)
+  const colorStats = state.stats.colors[id]
+  const rate = getColorRate(colorStats)
+  const displayRate = colorStats.attempts === 0 ? '—' : `${rate}%`
+
+  return `
+    <div class="color-row color-row-${id}" style="--value: ${rate}%">
+      <span class="color-swatch" aria-hidden="true"></span>
+      <span class="color-name">${string.colorName[state.locale]}</span>
+      <span class="color-bar" aria-hidden="true"><span></span></span>
+      <strong>${displayRate}</strong>
+    </div>
   `
 }
 
@@ -270,11 +339,12 @@ function handlePrimaryAction() {
 
   if (state.isSaving || !state.slots.every(Boolean)) return
 
-  const isCorrect = ANSWER.every((id, index) => state.slots[index] === id)
+  const answer = state.slots.filter(isBallId)
+  const isCorrect = ANSWER.every((id, index) => answer[index] === id)
   state.isSaving = true
   render()
 
-  recordStats(isCorrect)
+  recordStats(isCorrect, answer)
     .then((stats) => {
       state.stats = stats
     })
@@ -339,18 +409,52 @@ function getRate(stats: Stats) {
   return Math.round((stats.correct / stats.attempts) * 100)
 }
 
+function getColorRate(stats: ColorStats) {
+  if (stats.attempts === 0) return 0
+  return Math.round((stats.correct / stats.attempts) * 100)
+}
+
+function getColorSampleRounds(stats: Stats) {
+  return Math.max(...ANSWER.map((id) => stats.colors[id].attempts), 0)
+}
+
+function getColorInsight(stats: Stats, mode: 'strongest' | 'toughest'): ColorInsight | null {
+  const insights = ANSWER.map((id) => ({ id, rate: getColorRate(stats.colors[id]) })).filter(
+    (item) => stats.colors[item.id].attempts > 0,
+  )
+
+  if (insights.length === 0) return null
+  if (insights.every((item) => item.rate === insights[0].rate)) return null
+
+  return insights.reduce((selected, item) => {
+    if (mode === 'strongest') {
+      return item.rate > selected.rate ? item : selected
+    }
+
+    return item.rate < selected.rate ? item : selected
+  })
+}
+
+function getSlotHits(answer: BallId[]) {
+  return ANSWER.reduce((total, id, index) => total + (answer[index] === id ? 1 : 0), 0)
+}
+
+function formatDecimal(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1)
+}
+
 async function loadStats() {
   const apiStats = await requestStats('/api/stats')
   return apiStats ?? readLocalStats()
 }
 
-async function recordStats(isCorrect: boolean) {
+async function recordStats(isCorrect: boolean, answer: BallId[]) {
   const playerId = getPlayerId()
-  const localStats = recordLocalStats(isCorrect)
+  const localStats = recordLocalStats(isCorrect, answer)
   const apiStats = await requestStats('/api/stats', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ correct: isCorrect, playerId }),
+    body: JSON.stringify({ answer, correct: isCorrect, playerId }),
   })
 
   return apiStats ?? localStats
@@ -391,38 +495,64 @@ async function fetchWithTimeout(url: string, init?: RequestInit) {
   }
 }
 
-function isStatsPayload(value: unknown): value is { stats: Stats } {
+function isStatsPayload(value: unknown): value is { stats: unknown } {
   if (!value || typeof value !== 'object' || !('stats' in value)) return false
-  return isStats((value as { stats: unknown }).stats)
+  return Boolean((value as { stats: unknown }).stats)
 }
 
-function isStats(value: unknown): value is Stats {
-  if (!value || typeof value !== 'object') return false
+function normalizeStats(value: unknown): Stats {
+  if (!value || typeof value !== 'object') return createEmptyStats()
+
   const stats = value as Record<string, unknown>
-  return ['players', 'attempts', 'correct'].every((key) => Number.isFinite(stats[key]))
+
+  return {
+    players: toSafeCount(stats.players),
+    attempts: toSafeCount(stats.attempts),
+    correct: toSafeCount(stats.correct),
+    stringHits: toSafeCount(stats.stringHits),
+    colors: normalizeColorStats(stats.colors),
+  }
 }
 
-function normalizeStats(stats: Stats): Stats {
-  return {
-    players: Math.max(0, Math.floor(stats.players)),
-    attempts: Math.max(0, Math.floor(stats.attempts)),
-    correct: Math.max(0, Math.floor(stats.correct)),
-  }
+function normalizeColorStats(value: unknown) {
+  const colors = createEmptyColorStats()
+
+  if (!value || typeof value !== 'object') return colors
+
+  const rawColors = value as Record<string, unknown>
+
+  ANSWER.forEach((id) => {
+    const raw = rawColors[id]
+    if (!raw || typeof raw !== 'object') return
+
+    const color = raw as Record<string, unknown>
+    colors[id] = {
+      attempts: toSafeCount(color.attempts),
+      correct: toSafeCount(color.correct),
+    }
+  })
+
+  return colors
+}
+
+function toSafeCount(value: unknown) {
+  const numberValue = Number(value ?? 0)
+  return Number.isFinite(numberValue) ? Math.max(0, Math.floor(numberValue)) : 0
 }
 
 function readLocalStats() {
   const raw = storageGet(STATS_KEY)
-  if (!raw) return { ...EMPTY_STATS }
+  if (!raw) return createEmptyStats()
 
   try {
     const stats: unknown = JSON.parse(raw)
-    return isStats(stats) ? normalizeStats(stats) : { ...EMPTY_STATS }
+    return normalizeStats(stats)
   } catch {
-    return { ...EMPTY_STATS }
+    return createEmptyStats()
   }
 }
 
-function recordLocalStats(isCorrect: boolean) {
+function recordLocalStats(isCorrect: boolean, answer: BallId[]) {
   const stats = readLocalStats()
 
   if (storageGet(PLAYED_KEY) !== '1') {
@@ -432,9 +562,37 @@ function recordLocalStats(isCorrect: boolean) {
 
   stats.attempts += 1
   stats.correct += isCorrect ? 1 : 0
+  stats.stringHits += getSlotHits(answer)
+
+  ANSWER.forEach((id, index) => {
+    stats.colors[id].attempts += 1
+    stats.colors[id].correct += answer[index] === id ? 1 : 0
+  })
+
   storageSet(STATS_KEY, JSON.stringify(stats))
 
   return stats
+}
+
+function createEmptyStats(): Stats {
+  return {
+    players: 0,
+    attempts: 0,
+    correct: 0,
+    stringHits: 0,
+    colors: createEmptyColorStats(),
+  }
+}
+
+function createEmptyColorStats(): Record<BallId, ColorStats> {
+  return {
+    gold: { attempts: 0, correct: 0 },
+    red: { attempts: 0, correct: 0 },
+    black: { attempts: 0, correct: 0 },
+    green: { attempts: 0, correct: 0 },
+    purple: { attempts: 0, correct: 0 },
+    silver: { attempts: 0, correct: 0 },
+  }
 }
 
 function getPlayerId() {

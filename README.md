@@ -36,6 +36,8 @@ Gold と Silver は単色ではなく、CSS gradient で金属感を出してい
 フロントエンドは `/api/stats` を優先し、APIが使えない環境では `localStorage` へフォールバックします。
 ローカルホストではAPI呼び出しを抑制します。ローカルでAPIまで試す場合は `VITE_STATS_API=1` を付けて起動します。
 
+統計にはプレイ数、完全正解数、平均ヒット本数、色別正解率を保存します。
+
 Vercelで全世界向けの統計にする場合は、MarketplaceのRedis/Upstash連携で次の環境変数を設定します。
 
 ```sh
