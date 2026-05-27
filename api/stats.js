@@ -8,6 +8,11 @@ const memory = {
   correct: 0,
   stringHits: 0,
   colors: createEmptyColorStats(),
+  hitDistribution: createEmptyHitDistribution(),
+  firstPicks: createEmptyColorCounts(),
+  lastPicks: createEmptyColorCounts(),
+  pickOrder: createEmptyPickOrder(),
+  pairMistakes: {},
 }
 
 export default async function handler(request, response) {
@@ -46,12 +51,28 @@ async function readStats() {
   }
 
   try {
-    const [players, attempts, correct, stringHits, colors] = await Promise.all([
+    const [
+      players,
+      attempts,
+      correct,
+      stringHits,
+      colors,
+      hitDistribution,
+      firstPicks,
+      lastPicks,
+      pickOrder,
+      pairMistakes,
+    ] = await Promise.all([
       redis.scard(`${PREFIX}:players`),
       redis.get(`${PREFIX}:attempts`),
       redis.get(`${PREFIX}:correct`),
       redis.get(`${PREFIX}:stringHits`),
       readRedisColorStats(redis),
+      readRedisHitDistribution(redis),
+      readRedisColorCounts(redis, 'first'),
+      readRedisColorCounts(redis, 'last'),
+      readRedisPickOrder(redis),
+      readRedisPairMistakes(redis),
     ])
 
     return {
@@ -60,6 +81,11 @@ async function readStats() {
       correct: toNumber(correct),
       stringHits: toNumber(stringHits),
       colors,
+      hitDistribution,
+      firstPicks,
+      lastPicks,
+      pickOrder,
+      pairMistakes,
     }
   } catch {
     return readMemoryStats()
@@ -87,12 +113,22 @@ async function recordStats(playerId, isCorrect, answer) {
 
     if (answer.length > 0) {
       writes.push(redis.incrby(`${PREFIX}:stringHits`, score))
+      writes.push(redis.incr(`${PREFIX}:hit:${score}`))
+      writes.push(redis.incr(`${PREFIX}:first:${answer[0]}`))
+      writes.push(redis.incr(`${PREFIX}:last:${answer[ANSWER.length - 1]}`))
 
       ANSWER.forEach((id, index) => {
         writes.push(redis.incr(`${PREFIX}:color:${id}:attempts`))
         if (answer[index] === id) {
           writes.push(redis.incr(`${PREFIX}:color:${id}:correct`))
         }
+
+        const picked = answer[index]
+        writes.push(redis.incr(`${PREFIX}:pick:${index}:${picked}`))
+      })
+
+      getPairMistakes(answer).forEach((key) => {
+        writes.push(redis.incr(`${PREFIX}:pair:${key}`))
       })
     }
 
@@ -136,6 +172,11 @@ function readMemoryStats() {
     correct: memory.correct,
     stringHits: memory.stringHits,
     colors: memory.colors,
+    hitDistribution: memory.hitDistribution,
+    firstPicks: memory.firstPicks,
+    lastPicks: memory.lastPicks,
+    pickOrder: memory.pickOrder,
+    pairMistakes: memory.pairMistakes,
   }
 }
 
@@ -154,19 +195,85 @@ async function readRedisColorStats(redis) {
   return Object.fromEntries(entries)
 }
 
+async function readRedisColorCounts(redis, key) {
+  const entries = await Promise.all(
+    ANSWER.map(async (id) => {
+      const count = await redis.get(`${PREFIX}:${key}:${id}`)
+      return [id, toNumber(count)]
+    }),
+  )
+
+  return Object.fromEntries(entries)
+}
+
+async function readRedisHitDistribution(redis) {
+  return Promise.all(
+    createEmptyHitDistribution().map(async (_, hits) => {
+      const count = await redis.get(`${PREFIX}:hit:${hits}`)
+      return toNumber(count)
+    }),
+  )
+}
+
+async function readRedisPickOrder(redis) {
+  return Promise.all(
+    ANSWER.map(async (_, index) => {
+      const entries = await Promise.all(
+        ANSWER.map(async (id) => {
+          const count = await redis.get(`${PREFIX}:pick:${index}:${id}`)
+          return [id, toNumber(count)]
+        }),
+      )
+
+      return Object.fromEntries(entries)
+    }),
+  )
+}
+
+async function readRedisPairMistakes(redis) {
+  const entries = await Promise.all(
+    getAllPairKeys().map(async (key) => {
+      const count = await redis.get(`${PREFIX}:pair:${key}`)
+      return [key, toNumber(count)]
+    }),
+  )
+
+  return Object.fromEntries(entries.filter(([, count]) => count > 0))
+}
+
 function recordMemoryColorStats(answer, score) {
   if (answer.length === 0) return
 
   memory.stringHits += score
+  memory.hitDistribution[score] += 1
+  memory.firstPicks[answer[0]] += 1
+  memory.lastPicks[answer[ANSWER.length - 1]] += 1
 
   ANSWER.forEach((id, index) => {
     memory.colors[id].attempts += 1
     memory.colors[id].correct += answer[index] === id ? 1 : 0
+    memory.pickOrder[index][answer[index]] += 1
+  })
+
+  getPairMistakes(answer).forEach((key) => {
+    memory.pairMistakes[key] = (memory.pairMistakes[key] ?? 0) + 1
   })
 }
 
 function createEmptyColorStats() {
   return Object.fromEntries(ANSWER.map((id) => [id, { attempts: 0, correct: 0 }]))
+}
+
+function createEmptyColorCounts() {
+  return Object.fromEntries(ANSWER.map((id) => [id, 0]))
+}
+
+function createEmptyPickOrder() {
+  return ANSWER.map(() => createEmptyColorCounts())
+}
+
+function createEmptyHitDistribution() {
+  return Array(ANSWER.length + 1).fill(0)
 }
 
 function sanitizeAnswer(value) {
@@ -185,6 +292,38 @@ function isPerfect(answer) {
 
 function getSlotHits(answer) {
   return ANSWER.reduce((total, id, index) => total + (answer[index] === id ? 1 : 0), 0)
+}
+
+function getPairMistakes(answer) {
+  const seen = new Set()
+
+  ANSWER.forEach((expected, index) => {
+    const actual = answer[index]
+    if (!actual || actual === expected) return
+
+    const actualHomeIndex = ANSWER.indexOf(actual)
+    if (actualHomeIndex === -1 || answer[actualHomeIndex] !== expected) return
+
+    seen.add(createPairKey(expected, actual))
+  })
+
+  return [...seen]
+}
+
+function getAllPairKeys() {
+  const keys = []
+
+  ANSWER.forEach((first, firstIndex) => {
+    ANSWER.slice(firstIndex + 1).forEach((second) => {
+      keys.push(createPairKey(first, second))
+    })
+  })
+
+  return keys
+}
+
+function createPairKey(first, second) {
+  return [first, second].sort((a, b) => ANSWER.indexOf(a) - ANSWER.indexOf(b)).join(':')
 }
 
 function sanitizePlayerId(value) {

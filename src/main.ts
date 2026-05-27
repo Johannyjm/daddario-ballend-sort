@@ -17,6 +17,11 @@ type Stats = {
   correct: number
   stringHits: number
   colors: Record<BallId, ColorStats>
+  hitDistribution: number[]
+  firstPicks: Record<BallId, number>
+  lastPicks: Record<BallId, number>
+  pickOrder: Array<Record<BallId, number>>
+  pairMistakes: Record<string, number>
 }
 
 type ColorStats = {
@@ -37,6 +42,7 @@ type GameState = {
   result: boolean | null
   stats: Stats
   isSaving: boolean
+  dashboardOrder: BallId[]
 }
 
 const STRINGS: StringSpec[] = [
@@ -68,6 +74,14 @@ const copy = {
       perfectRate: '完全率',
       average: '平均',
       colorAccuracy: '色別正解率',
+      stringAccuracy: '弦別正解率',
+      publicPatterns: 'みんなの傾向',
+      scoreDistribution: '正解数の分布',
+      pickOrder: '選ばれがちな色',
+      mixedPair: 'よく混ざる',
+      firstPick: '最初',
+      lastPick: '最後',
+      nearMiss: 'あと1組',
       strongest: '安定',
       toughest: '難所',
       noData: 'まだ',
@@ -93,6 +107,14 @@ const copy = {
       perfectRate: 'Rate',
       average: 'Average',
       colorAccuracy: 'Color accuracy',
+      stringAccuracy: 'String accuracy',
+      publicPatterns: 'Patterns',
+      scoreDistribution: 'Score distribution',
+      pickOrder: 'Picked by string',
+      mixedPair: 'Mixed pair',
+      firstPick: 'First',
+      lastPick: 'Last',
+      nearMiss: 'One swap',
       strongest: 'Strongest',
       toughest: 'Toughest',
       noData: 'Pending',
@@ -122,6 +144,7 @@ const state: GameState = {
   result: null,
   stats: readLocalStats(),
   isSaving: false,
+  dashboardOrder: shuffleBallIds(ANSWER, true),
 }
 
 render()
@@ -244,8 +267,7 @@ function resultMarkup() {
   const tone = state.result ? 'correct' : 'wrong'
   const colorSamples = getColorSampleRounds(state.stats)
   const average = colorSamples === 0 ? text.stats.noData : `${formatDecimal(state.stats.stringHits / colorSamples)}/6`
-  const strongest = getColorInsight(state.stats, 'strongest')
-  const toughest = getColorInsight(state.stats, 'toughest')
+  const detail = state.result ? correctDashboardMarkup() : wrongDashboardMarkup()
 
   return `
     <section class="dashboard result-${tone}" aria-live="polite">
@@ -256,16 +278,71 @@ function resultMarkup() {
         ${statItem(text.stats.perfectRate, `${getRate(state.stats)}%`)}
         ${statItem(text.stats.average, average)}
       </div>
-      <section class="color-panel" aria-label="${text.stats.colorAccuracy}">
-        <h3>${text.stats.colorAccuracy}</h3>
-        <div class="color-rows">
-          ${ANSWER.map((id) => colorRowMarkup(id)).join('')}
-        </div>
-      </section>
-      <div class="insight-grid">
-        ${insightItem(text.stats.strongest, strongest)}
-        ${insightItem(text.stats.toughest, toughest)}
-        ${statItem(text.stats.players, state.stats.players, 'insight')}
+      ${detail}
+    </section>
+  `
+}
+
+function wrongDashboardMarkup() {
+  return `
+    ${colorAccuracyPanelMarkup(state.dashboardOrder, 'color')}
+    ${patternsPanelMarkup()}
+    ${scoreDistributionMarkup()}
+  `
+}
+
+function correctDashboardMarkup() {
+  const text = copy[state.locale]
+  const strongest = getColorInsight(state.stats, 'strongest')
+  const toughest = getColorInsight(state.stats, 'toughest')
+
+  return `
+    ${colorAccuracyPanelMarkup(ANSWER, 'string')}
+    ${patternsPanelMarkup()}
+    ${scoreDistributionMarkup()}
+    <section class="order-panel" aria-label="${text.stats.pickOrder}">
+      <h3>${text.stats.pickOrder}</h3>
+      <div class="order-rows">
+        ${state.stats.pickOrder.map((counts, index) => pickOrderRowMarkup(counts, index)).join('')}
+      </div>
+    </section>
+    <div class="insight-grid">
+      ${insightItem(text.stats.strongest, strongest)}
+      ${insightItem(text.stats.toughest, toughest)}
+      ${statItem(text.stats.players, state.stats.players, 'insight')}
+    </div>
+  `
+}
+
+function colorAccuracyPanelMarkup(order: BallId[], labelMode: 'color' | 'string') {
+  const text = copy[state.locale]
+  const label = labelMode === 'string' ? text.stats.stringAccuracy : text.stats.colorAccuracy
+
+  return `
+    <section class="color-panel" aria-label="${label}">
+      <h3>${label}</h3>
+      <div class="color-rows">
+        ${order.map((id) => colorRowMarkup(id, labelMode)).join('')}
+      </div>
+    </section>
+  `
+}
+
+function patternsPanelMarkup() {
+  const text = copy[state.locale]
+  const mixedPair = getTopPairMistake(state.stats)
+  const firstPick = getTopColorCount(state.stats.firstPicks)
+  const lastPick = getTopColorCount(state.stats.lastPicks)
+  const nearMiss = state.stats.attempts === 0 ? text.stats.noData : `${getCountRate(state.stats.hitDistribution[4] ?? 0, state.stats.attempts)}%`
+
+  return `
+    <section class="pattern-panel" aria-label="${text.stats.publicPatterns}">
+      <h3>${text.stats.publicPatterns}</h3>
+      <div class="pattern-grid">
+        ${patternItem(text.stats.mixedPair, mixedPair ? pairMarkup(mixedPair.key) : text.stats.noData)}
+        ${patternItem(text.stats.firstPick, firstPick ? colorPillMarkup(firstPick.id, firstPick.rate) : text.stats.noData)}
+        ${patternItem(text.stats.lastPick, lastPick ? colorPillMarkup(lastPick.id, lastPick.rate) : text.stats.noData)}
+        ${patternItem(text.stats.nearMiss, nearMiss)}
       </div>
     </section>
   `
@@ -279,24 +356,99 @@ function insightItem(label: string, insight: ColorInsight | null) {
   return `
     <div class="stat insight">
       <span>${label}</span>
-      <strong>${getStringLabel(insight.id)}</strong>
+      <strong>${getString(insight.id).colorName[state.locale]}</strong>
       <small>${insight.rate}%</small>
     </div>
   `
 }
 
-function colorRowMarkup(id: BallId) {
+function colorRowMarkup(id: BallId, labelMode: 'color' | 'string' = 'color') {
   const colorStats = state.stats.colors[id]
   const rate = getColorRate(colorStats)
   const displayRate = colorStats.attempts === 0 ? '—' : `${rate}%`
+  const label = labelMode === 'string' ? getStringLabel(id) : getString(id).colorName[state.locale]
 
   return `
     <div class="color-row color-row-${id}" style="--value: ${rate}%">
       <span class="color-swatch" aria-hidden="true"></span>
-      <span class="color-name">${getStringLabel(id)}</span>
+      <span class="color-name">${label}</span>
       <span class="color-bar" aria-hidden="true"><span></span></span>
       <strong>${displayRate}</strong>
     </div>
+  `
+}
+
+function patternItem(label: string, valueMarkup: string) {
+  return `
+    <div class="pattern-card">
+      <span>${label}</span>
+      <strong>${valueMarkup}</strong>
+    </div>
+  `
+}
+
+function colorPillMarkup(id: BallId, rate?: number) {
+  const rateMarkup = typeof rate === 'number' ? `<small>${rate}%</small>` : ''
+
+  return `
+    <span class="color-pill color-pill-${id}">
+      <span aria-hidden="true"></span>
+      ${getString(id).colorName[state.locale]}
+      ${rateMarkup}
+    </span>
+  `
+}
+
+function pairMarkup(key: string) {
+  const [first, second] = parsePairKey(key)
+  if (!first || !second) return copy[state.locale].stats.noData
+
+  return `
+    <span class="pair">
+      ${colorPillMarkup(first)}
+      <span aria-hidden="true">/</span>
+      ${colorPillMarkup(second)}
+    </span>
+  `
+}
+
+function pickOrderRowMarkup(counts: Record<BallId, number>, index: number) {
+  const top = getTopColors(counts, ANSWER.length, true)
+  const rank = getStringLabel(ANSWER[index])
+  const balls = top.length > 0 ? top.map((item) => colorPillMarkup(item.id, item.rate)).join('') : copy[state.locale].stats.noData
+
+  return `
+    <div class="order-row">
+      <span>${rank}</span>
+      <div>${balls}</div>
+    </div>
+  `
+}
+
+function scoreDistributionMarkup() {
+  const label = copy[state.locale].stats.scoreDistribution
+  const attempts = state.stats.attempts
+
+  return `
+    <section class="score-panel" aria-label="${label}">
+      <h3>${label}</h3>
+      <div class="score-bars">
+        ${state.stats.hitDistribution
+          .map((count, hits) => ({ count, hits }))
+          .filter(({ hits }) => hits !== 5)
+          .map(({ count, hits }) => {
+            const rate = getCountRate(count, attempts)
+            return `
+              <div class="score-bar" style="--value: ${rate}%">
+                <span>${hits}/6</span>
+                <i aria-hidden="true"><b></b></i>
+                <strong>${rate}%</strong>
+              </div>
+            `
+          })
+          .join('')}
+      </div>
+    </section>
   `
 }
 
@@ -348,11 +500,26 @@ function handlePrimaryAction() {
       state.stats = stats
     })
     .finally(() => {
-      state.isSaving = false
-      state.status = 'result'
-      state.result = isCorrect
-      render()
+      transitionToResult(isCorrect)
     })
+}
+
+function transitionToResult(isCorrect: boolean) {
+  app.classList.add('is-transitioning-out')
+
+  window.setTimeout(() => {
+    state.isSaving = false
+    state.status = 'result'
+    state.result = isCorrect
+    state.dashboardOrder = shuffleBallIds(ANSWER, true)
+    render()
+    app.classList.remove('is-transitioning-out')
+    app.classList.add('is-transitioning-in')
+
+    window.setTimeout(() => {
+      app.classList.remove('is-transitioning-in')
+    }, 180)
+  }, 120)
 }
 
 function startRound() {
@@ -361,6 +528,7 @@ function startRound() {
   state.status = 'playing'
   state.result = null
   state.isSaving = false
+  app.classList.remove('is-transitioning-out', 'is-transitioning-in')
   render()
 }
 
@@ -373,14 +541,20 @@ function createEmptySlots() {
 }
 
 function shuffleAnswer(): BallId[] {
-  const shuffled = [...ANSWER]
+  return shuffleBallIds(ANSWER, true)
+}
+
+function shuffleBallIds(ids: BallId[], avoidSameOrder = false): BallId[] {
+  const shuffled = [...ids]
 
   for (let index = shuffled.length - 1; index > 0; index -= 1) {
     const swapIndex = Math.floor(Math.random() * (index + 1))
     ;[shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]]
   }
 
-  return ANSWER.every((id, index) => shuffled[index] === id) ? shuffleAnswer() : shuffled
+  return avoidSameOrder && ids.every((id, index) => shuffled[index] === id)
+    ? shuffleBallIds(ids, avoidSameOrder)
+    : shuffled
 }
 
 function getString(id: BallId) {
@@ -422,6 +596,34 @@ function getColorSampleRounds(stats: Stats) {
   return Math.max(...ANSWER.map((id) => stats.colors[id].attempts), 0)
 }
 
+function getCountRate(count: number, total: number) {
+  if (total === 0) return 0
+  return Math.round((count / total) * 100)
+}
+
+function getTopColorCount(counts: Record<BallId, number>): ColorInsight | null {
+  const top = getTopColors(counts, 1)[0]
+  return top ?? null
+}
+
+function getTopColors(counts: Record<BallId, number>, limit: number, includeZero = false) {
+  const total = ANSWER.reduce((sum, id) => sum + counts[id], 0)
+  if (total === 0) return []
+
+  return ANSWER.map((id) => ({ id, count: counts[id], rate: getCountRate(counts[id], total) }))
+    .filter((item) => includeZero || item.count > 0)
+    .sort((a, b) => b.count - a.count || ANSWER.indexOf(a.id) - ANSWER.indexOf(b.id))
+    .slice(0, limit)
+}
+
+function getTopPairMistake(stats: Stats) {
+  const entries = Object.entries(stats.pairMistakes).filter(([, count]) => count > 0)
+  if (entries.length === 0) return null
+
+  const [key, count] = entries.sort(([keyA, countA], [keyB, countB]) => countB - countA || keyA.localeCompare(keyB))[0]
+  return { key, count }
+}
+
 function getColorInsight(stats: Stats, mode: 'strongest' | 'toughest'): ColorInsight | null {
   const insights = ANSWER.map((id) => ({ id, rate: getColorRate(stats.colors[id]) })).filter(
     (item) => stats.colors[item.id].attempts > 0,
@@ -441,6 +643,31 @@ function getColorInsight(stats: Stats, mode: 'strongest' | 'toughest'): ColorIns
 
 function getSlotHits(answer: BallId[]) {
   return ANSWER.reduce((total, id, index) => total + (answer[index] === id ? 1 : 0), 0)
+}
+
+function getPairMistakes(answer: BallId[]) {
+  const seen = new Set<string>()
+
+  ANSWER.forEach((expected, index) => {
+    const actual = answer[index]
+    if (!actual || actual === expected) return
+
+    const actualHomeIndex = ANSWER.indexOf(actual)
+    if (actualHomeIndex === -1 || answer[actualHomeIndex] !== expected) return
+
+    seen.add(createPairKey(expected, actual))
+  })
+
+  return [...seen]
+}
+
+function createPairKey(first: BallId, second: BallId) {
+  return [first, second].sort((a, b) => ANSWER.indexOf(a) - ANSWER.indexOf(b)).join(':')
+}
+
+function parsePairKey(key: string): [BallId | null, BallId | null] {
+  const [first, second] = key.split(':')
+  return [isBallId(first) ? first : null, isBallId(second) ? second : null]
 }
 
 function formatDecimal(value: number) {
@@ -514,6 +741,11 @@ function normalizeStats(value: unknown): Stats {
     correct: toSafeCount(stats.correct),
     stringHits: toSafeCount(stats.stringHits),
     colors: normalizeColorStats(stats.colors),
+    hitDistribution: normalizeHitDistribution(stats.hitDistribution),
+    firstPicks: normalizeColorCounts(stats.firstPicks),
+    lastPicks: normalizeColorCounts(stats.lastPicks),
+    pickOrder: normalizePickOrder(stats.pickOrder),
+    pairMistakes: normalizePairMistakes(stats.pairMistakes),
   }
 }
 
@@ -536,6 +768,47 @@ function normalizeColorStats(value: unknown) {
   })
 
   return colors
+}
+
+function normalizeColorCounts(value: unknown) {
+  const counts = createEmptyColorCounts()
+
+  if (!value || typeof value !== 'object') return counts
+
+  const rawCounts = value as Record<string, unknown>
+  ANSWER.forEach((id) => {
+    counts[id] = toSafeCount(rawCounts[id])
+  })
+
+  return counts
+}
+
+function normalizePickOrder(value: unknown) {
+  const order = createEmptyPickOrder()
+  if (!Array.isArray(value)) return order
+
+  return order.map((counts, index) => normalizeColorCounts(value[index] ?? counts))
+}
+
+function normalizeHitDistribution(value: unknown) {
+  const distribution = createEmptyHitDistribution()
+  if (!Array.isArray(value)) return distribution
+
+  return distribution.map((_, index) => toSafeCount(value[index]))
+}
+
+function normalizePairMistakes(value: unknown) {
+  const pairs: Record<string, number> = {}
+  if (!value || typeof value !== 'object') return pairs
+
+  const rawPairs = value as Record<string, unknown>
+  Object.keys(rawPairs).forEach((key) => {
+    const [first, second] = parsePairKey(key)
+    if (!first || !second) return
+    pairs[createPairKey(first, second)] = toSafeCount(rawPairs[key])
+  })
+
+  return pairs
 }
 
 function toSafeCount(value: unknown) {
@@ -565,11 +838,30 @@ function recordLocalStats(isCorrect: boolean, answer: BallId[]) {
 
   stats.attempts += 1
   stats.correct += isCorrect ? 1 : 0
-  stats.stringHits += getSlotHits(answer)
+  const hits = getSlotHits(answer)
+  stats.stringHits += hits
+  stats.hitDistribution[hits] += 1
+
+  if (answer[0]) {
+    stats.firstPicks[answer[0]] += 1
+  }
+
+  if (answer[ANSWER.length - 1]) {
+    stats.lastPicks[answer[ANSWER.length - 1]] += 1
+  }
 
   ANSWER.forEach((id, index) => {
     stats.colors[id].attempts += 1
     stats.colors[id].correct += answer[index] === id ? 1 : 0
+
+    const picked = answer[index]
+    if (picked) {
+      stats.pickOrder[index][picked] += 1
+    }
+  })
+
+  getPairMistakes(answer).forEach((key) => {
+    stats.pairMistakes[key] = (stats.pairMistakes[key] ?? 0) + 1
   })
 
   storageSet(STATS_KEY, JSON.stringify(stats))
@@ -584,6 +876,11 @@ function createEmptyStats(): Stats {
     correct: 0,
     stringHits: 0,
     colors: createEmptyColorStats(),
+    hitDistribution: createEmptyHitDistribution(),
+    firstPicks: createEmptyColorCounts(),
+    lastPicks: createEmptyColorCounts(),
+    pickOrder: createEmptyPickOrder(),
+    pairMistakes: {},
   }
 }
 
@@ -596,6 +893,25 @@ function createEmptyColorStats(): Record<BallId, ColorStats> {
     purple: { attempts: 0, correct: 0 },
     silver: { attempts: 0, correct: 0 },
   }
+}
+
+function createEmptyColorCounts(): Record<BallId, number> {
+  return {
+    gold: 0,
+    red: 0,
+    black: 0,
+    green: 0,
+    purple: 0,
+    silver: 0,
+  }
+}
+
+function createEmptyPickOrder() {
+  return ANSWER.map(() => createEmptyColorCounts())
+}
+
+function createEmptyHitDistribution() {
+  return Array(ANSWER.length + 1).fill(0)
 }
 
 function getPlayerId() {
